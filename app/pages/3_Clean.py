@@ -4,9 +4,18 @@ from app.utils.llm_agent import suggest_cleaning
 from app.utils.cleaning import (
     apply_cleaning_actions,
     validate_data,
-)  # Import validate_data
+    apply_one_hot_encoding,
+    apply_label_encoding,
+    remove_stopwords,
+    apply_regex_replace,
+    standardize_datetime_format,
+    extract_date_part,
+    remove_outliers_iqr,
+    apply_log_transform,  # New imports
+)
 import json  # For handling cleaning actions
 import re  # For regex validation
+import nltk  # For NLTK download check
 from datetime import datetime
 
 st.set_page_config(page_title="Clean Dataset", page_icon="🧹", layout="wide")
@@ -15,6 +24,18 @@ st.title("🧹 Clean Dataset")
 st.markdown(
     "Apply intelligent cleaning suggestions and define custom validation rules for your data."
 )
+
+# Ensure NLTK stopwords are downloaded
+try:
+    nltk.data.find("corpora/stopwords")
+except nltk.downloader.DownloadError:
+    st.info(
+        "Downloading NLTK stopwords (first time setup)... This might take a moment."
+    )
+    nltk.download("stopwords")
+    st.success("NLTK stopwords downloaded successfully!")
+    st.experimental_rerun()
+
 
 if "current_df" not in st.session_state or not st.session_state["current_df"]:
     st.warning(
@@ -49,7 +70,7 @@ else:
         st.write(f"**Current Profile for '{selected_column_clean}':**")
         st.json(col_profile)
 
-        # Add type conversion suggestion directly here if available
+        # Type conversion suggestion
         if "type_suggestion" in col_profile and col_profile["type_suggestion"]:
             st.info(
                 f"**Type Conversion Suggestion:** This column could be converted to **{col_profile['type_suggestion']}**."
@@ -60,7 +81,7 @@ else:
             ):
                 action = {
                     "column": selected_column_clean,
-                    "method": f"Convert to {col_profile['type_suggestion']}",  # New method
+                    "method": f"Convert to {col_profile['type_suggestion']}",
                     "parameters": {},
                 }
                 st.session_state["cleaning_actions"].append(action)
@@ -69,8 +90,181 @@ else:
                 )
                 st.rerun()
 
+        # Categorical Encoding Options (Direct UI)
+        if (
+            col_profile.get("dtype") in ["object", "string"]
+            and col_profile.get("unique_count", 0) > 1
+        ):
+            st.info(
+                f"**Categorical Encoding Options:** Column '{selected_column_clean}' is categorical."
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(
+                    f"Apply One-Hot Encoding to {selected_column_clean}",
+                    key=f"apply_ohe_{selected_column_clean}",
+                ):
+                    action = {
+                        "column": selected_column_clean,
+                        "method": "One-Hot Encode",
+                        "parameters": {},
+                    }
+                    st.session_state["cleaning_actions"].append(action)
+                    st.success(
+                        f"Action 'One-Hot Encode' added for column '{selected_column_clean}'."
+                    )
+                    st.rerun()
+            with col2:
+                if st.button(
+                    f"Apply Label Encoding to {selected_column_clean}",
+                    key=f"apply_le_{selected_column_clean}",
+                ):
+                    action = {
+                        "column": selected_column_clean,
+                        "method": "Label Encode",
+                        "parameters": {},
+                    }
+                    st.session_state["cleaning_actions"].append(action)
+                    st.success(
+                        f"Action 'Label Encode' added for column '{selected_column_clean}'."
+                    )
+                    st.rerun()
+
+        # New: Text Cleaning Options (Direct UI)
+        if col_profile.get("dtype") in ["object", "string"]:
+            st.info(
+                f"**Text Cleaning Options:** Column '{selected_column_clean}' is text-based."
+            )
+            if st.button(
+                f"Remove Stop Words from {selected_column_clean}",
+                key=f"remove_stopwords_{selected_column_clean}",
+            ):
+                action = {
+                    "column": selected_column_clean,
+                    "method": "Remove Stopwords",
+                    "parameters": {},
+                }
+                st.session_state["cleaning_actions"].append(action)
+                st.success(
+                    f"Action 'Remove Stopwords' added for column '{selected_column_clean}'."
+                )
+                st.rerun()
+
+            with st.expander(f"Apply Regex Find & Replace in {selected_column_clean}"):
+                regex_pattern = st.text_input(
+                    "Regex Pattern:", key=f"regex_pattern_{selected_column_clean}"
+                )
+                regex_replacement = st.text_input(
+                    "Replacement String:",
+                    key=f"regex_replacement_{selected_column_clean}",
+                )
+                if st.button(
+                    "Add Regex Replace Action",
+                    key=f"add_regex_replace_{selected_column_clean}",
+                ):
+                    if regex_pattern:
+                        action = {
+                            "column": selected_column_clean,
+                            "method": "Regex Replace",
+                            "parameters": {
+                                "pattern": regex_pattern,
+                                "replacement": regex_replacement,
+                            },
+                        }
+                        st.session_state["cleaning_actions"].append(action)
+                        st.success(
+                            f"Action 'Regex Replace' added for column '{selected_column_clean}'."
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Please provide a regex pattern.")
+
+        # New: Date/Time Specific Options (Direct UI)
+        if (
+            col_profile.get("dtype") == "datetime64[ns]"
+        ):  # Check for inferred datetime type
+            st.info(
+                f"**Date/Time Options:** Column '{selected_column_clean}' is a datetime type."
+            )
+            target_date_format = st.text_input(
+                "Target Date Format (e.g., %Y-%m-%d):",
+                value="%Y-%m-%d",
+                key=f"date_format_{selected_column_clean}",
+            )
+            if st.button(
+                f"Standardize Date Format for {selected_column_clean}",
+                key=f"standardize_date_format_{selected_column_clean}",
+            ):
+                action = {
+                    "column": selected_column_clean,
+                    "method": "Standardize Date Format",
+                    "parameters": {"format": target_date_format},
+                }
+                st.session_state["cleaning_actions"].append(action)
+                st.success(
+                    f"Action 'Standardize Date Format' added for column '{selected_column_clean}'."
+                )
+                st.rerun()
+
+            date_part_to_extract = st.selectbox(
+                "Extract Date Part:",
+                ["None", "Year", "Month", "Day", "Hour", "Minute", "Second"],
+                key=f"extract_date_part_{selected_column_clean}",
+            )
+            if date_part_to_extract != "None" and st.button(
+                f"Extract {date_part_to_extract} from {selected_column_clean}",
+                key=f"extract_date_part_btn_{selected_column_clean}",
+            ):
+                action = {
+                    "column": selected_column_clean,
+                    "method": "Extract Date Part",
+                    "parameters": {"part": date_part_to_extract.lower()},
+                }
+                st.session_state["cleaning_actions"].append(action)
+                st.success(
+                    f"Action 'Extract {date_part_to_extract}' added for column '{selected_column_clean}'."
+                )
+                st.rerun()
+
+        # New: Outlier Handling Options (Direct UI)
+        if col_profile.get("dtype") in ["int64", "float64"]:  # Check for numeric type
+            st.info(
+                f"**Outlier Handling & Transformation Options:** Column '{selected_column_clean}' is numeric."
+            )
+            col_outlier1, col_outlier2 = st.columns(2)
+            with col_outlier1:
+                if st.button(
+                    f"Remove Outliers (IQR) from {selected_column_clean}",
+                    key=f"remove_outliers_iqr_{selected_column_clean}",
+                ):
+                    action = {
+                        "column": selected_column_clean,
+                        "method": "Remove Outliers (IQR)",
+                        "parameters": {},
+                    }
+                    st.session_state["cleaning_actions"].append(action)
+                    st.success(
+                        f"Action 'Remove Outliers (IQR)' added for column '{selected_column_clean}'."
+                    )
+                    st.rerun()
+            with col_outlier2:
+                if st.button(
+                    f"Apply Log Transform to {selected_column_clean}",
+                    key=f"apply_log_transform_{selected_column_clean}",
+                ):
+                    action = {
+                        "column": selected_column_clean,
+                        "method": "Log Transform",
+                        "parameters": {},
+                    }
+                    st.session_state["cleaning_actions"].append(action)
+                    st.success(
+                        f"Action 'Log Transform' added for column '{selected_column_clean}'."
+                    )
+                    st.rerun()
+
         if st.button(
-            f"Get General Cleaning Suggestions for {selected_column_clean}",
+            f"Get General AI-Simulated Suggestions for {selected_column_clean}",
             key="get_suggestions_btn",
         ):
             with st.spinner("Getting AI-simulated suggestions..."):
@@ -83,7 +277,7 @@ else:
             and st.session_state["current_suggestions"]
         ):
             st.markdown("---")
-            st.write("##### Suggested Cleaning Actions:")
+            st.write("##### AI-Simulated Cleaning Suggestions:")
             for i, suggestion in enumerate(st.session_state["current_suggestions"]):
                 expander_title = (
                     f"Suggestion {i+1}: {suggestion.get('method', 'Unknown Method')}"
@@ -121,16 +315,15 @@ else:
                 f"**{idx+1}. Column:** `{action['column']}` | **Method:** `{action['method']}`"
             )
             if action["parameters"]:
-                st.write(f"   **Parameters:** {action['parameters']}")
+                st.write(
+                    f"   **Parameters:** {json.dumps(action['parameters'])}"
+                )  # Display parameters cleanly
         st.markdown("---")
         if st.button(
             "Apply All Selected Cleaning Actions and Preview", key="apply_all_clean_btn"
         ):
             with st.spinner("Applying cleaning actions..."):
                 try:
-                    # Apply actions to a copy of the original dataframe
-                    # It's important to apply to the current_df and update cleaned_df
-                    # so that subsequent validations or exports use the latest state.
                     df_current_state = pd.read_json(st.session_state["current_df"])
                     cleaned_df = apply_cleaning_actions(
                         df_current_state.copy(), st.session_state["cleaning_actions"]
@@ -182,16 +375,13 @@ else:
             key="select_rule_type",
         )
 
-        # Conditional input for value based on rule type
         value_input = None
         if rule_type not in ["is_null", "is_not_null"]:
-            if "string" in str(df[col_to_validate].dtype):
+            if pd.api.types.is_string_dtype(df[col_to_validate]):
                 value_input = st.text_input(
                     "Value/Regex for comparison:", key="rule_value_text"
                 )
-            elif "int" in str(df[col_to_validate].dtype) or "float" in str(
-                df[col_to_validate].dtype
-            ):
+            elif pd.api.types.is_numeric_dtype(df[col_to_validate]):
                 value_input = st.number_input(
                     "Value for comparison:", key="rule_value_number", value=0.0
                 )
@@ -213,7 +403,7 @@ else:
                 st.success(
                     f"Rule added: {col_to_validate} {rule_type} {value_input if value_input is not None else ''}"
                 )
-                st.rerun()  # Rerun to update the list of rules
+                st.rerun()
 
     st.write("##### Defined Validation Rules:")
     if not st.session_state["validation_rules"]:
@@ -234,17 +424,13 @@ else:
             st.warning("Please define at least one validation rule first.")
         else:
             with st.spinner("Running custom validations..."):
-                # Always validate against the currently cleaned_df if available, else original df
-                df_to_validate = pd.read_json(
-                    st.session_state["current_df"]
-                )  # Validate against the current state of the df
-
+                df_to_validate = pd.read_json(st.session_state["current_df"])
                 validation_results = validate_data(
                     df_to_validate, st.session_state["validation_rules"]
                 )
                 st.session_state["validation_results"] = validation_results
                 st.success("Validation complete!")
-                st.rerun()  # Rerun to display results
+                st.rerun()
 
     if st.session_state["validation_results"]:
         st.write("##### Validation Results:")

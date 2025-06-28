@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
 from sklearn.ensemble import IsolationForest
+from datetime import datetime
 
 
 def infer_data_type_suggestions(df: pd.DataFrame) -> dict:
@@ -18,37 +19,56 @@ def infer_data_type_suggestions(df: pd.DataFrame) -> dict:
             # Try converting to numeric
             try:
                 # Use regex to replace common non-numeric characters before conversion
-                cleaned_series = (
+                # e.g., '1,234.56' -> '1234.56', '$100' -> '100'
+                cleaned_series_numeric = (
                     series.astype(str)
                     .str.replace(r"[$,%€]", "", regex=True)
+                    .str.replace(r",", "", regex=True)
                     .str.strip()
                 )
                 # Check if it can be purely numeric (ignoring NaN)
                 if (
-                    pd.to_numeric(cleaned_series, errors="coerce").notnull().sum()
+                    pd.to_numeric(cleaned_series_numeric, errors="coerce")
+                    .notnull()
+                    .sum()
                     / len(series.dropna())
                     > 0.9
                 ):
-                    # If more than 90% of non-null values can be converted to numeric
                     suggestions[col] = "numeric"
-                    continue  # Move to next column if numeric conversion is strong
+                    continue
 
             except Exception:
                 pass  # Not numeric
 
             # Try converting to datetime
             try:
-                # Check if it can be purely datetime (ignoring NaN)
-                if (
-                    pd.to_datetime(series, errors="coerce", dayfirst=False)
-                    .notnull()
-                    .sum()
-                    / len(series.dropna())
-                    > 0.9
-                ):
-                    # If more than 90% of non-null values can be converted to datetime
+                # A stricter check for datetime might be better here to avoid misinterpreting numbers as dates
+                # Using a common format list for better inference
+                common_date_formats = [
+                    "%Y-%m-%d",
+                    "%m/%d/%Y",
+                    "%d-%m-%Y",
+                    "%Y/%m/%d",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y/%m/%d %H:%M:%S",
+                    "%m/%d/%Y %H:%M:%S",
+                ]
+                is_datetime_candidate = False
+                for fmt in common_date_formats:
+                    # Check if a significant portion can be parsed with this format
+                    if (
+                        pd.to_datetime(series, format=fmt, errors="coerce")
+                        .notnull()
+                        .sum()
+                        / len(series.dropna())
+                        > 0.9
+                    ):
+                        is_datetime_candidate = True
+                        break
+
+                if is_datetime_candidate:
                     suggestions[col] = "datetime"
-                    continue  # Move to next column if datetime conversion is strong
+                    continue
             except Exception:
                 pass  # Not datetime
 
@@ -99,6 +119,14 @@ def profile_dataset(df: pd.DataFrame) -> dict:
                 round(kurtosis(series.dropna()), 2) if series.notnull().any() else None
             )
 
+            # Add IQR for outlier analysis
+            Q1 = series.quantile(0.25)
+            Q3 = series.quantile(0.75)
+            IQR = Q3 - Q1
+            col_profile["IQR"] = round(IQR, 2)
+            col_profile["lower_bound_iqr"] = round(Q1 - 1.5 * IQR, 2)
+            col_profile["upper_bound_iqr"] = round(Q3 + 1.5 * IQR, 2)
+
             # Outlier detection using Isolation Forest
             outliers = detect_outliers(series.dropna().to_frame())
             col_profile["outliers_count"] = len(outliers)
@@ -110,12 +138,24 @@ def profile_dataset(df: pd.DataFrame) -> dict:
                 series.mode().iloc[0] if not series.mode().empty else None
             )
             col_profile["top_5_values"] = series.value_counts().nlargest(5).to_dict()
+            col_profile["avg_word_count"] = (
+                round(series.astype(str).str.split().str.len().mean(), 2)
+                if series.notnull().any()
+                else None
+            )
         elif pd.api.types.is_datetime64_any_dtype(series):
             col_profile["first_date"] = (
-                series.min().strftime("%Y-%m-%d") if series.notnull().any() else None
+                series.min().strftime("%Y-%m-%d %H:%M:%S")
+                if series.notnull().any()
+                else None
             )
             col_profile["last_date"] = (
-                series.max().strftime("%Y-%m-%d") if series.notnull().any() else None
+                series.max().strftime("%Y-%m-%d %H:%M:%S")
+                if series.notnull().any()
+                else None
+            )
+            col_profile["date_range_days"] = (
+                (series.max() - series.min()).days if series.notnull().any() else None
             )
 
         profile[col] = col_profile
