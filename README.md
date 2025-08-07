@@ -4,6 +4,8 @@
 
 This tool operates **fully offline**, **without logins**, and uses **open-source LLMs** (simulated in this version due to environment constraints) and **local object storage** to maintain privacy and flexibility.
 
+<img width="2560" height="1319" alt="image" src="https://github.com/user-attachments/assets/403baa0d-9c5d-4d68-ae19-e016e6e10ab5" />
+
 ## Features:
 
 - **Home**: Overview of recent datasets and profiling status.
